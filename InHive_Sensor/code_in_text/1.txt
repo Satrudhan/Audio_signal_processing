@@ -1,0 +1,87 @@
+#include "mock_signal.h"
+#include "mock_signal.h"
+#include <Arduino.h> // Or BasicLinearAlgebra if you choose that route
+#include <arduinoFFT.h> // Include the correct FFT library
+#include <vector>
+#include <Filters/Butterworth.hpp>
+#include <Filters.h>
+#include <AH/Timing/MillisMicrosTimer.hpp>
+ 
+
+#define SIGNAL_SIZE (sizeof(mock_signal) / sizeof(mock_signal[0]))  // Get array size
+
+float processed_signal[SIGNAL_SIZE];  // Store processed data
+
+// Low-pass filter (Simple IIR implementation)
+float lowPassFilter(float input, float prev_output, float alpha) {
+    return alpha * input + (1 - alpha) * prev_output;
+}
+
+// Normalize function
+void normalizeSignal(float* signal, size_t size) {
+    uint16_t max_val = 65535;  // Maximum 16-bit unsigned value
+    uint16_t min_val = 0;
+    
+    for (size_t i = 0; i < size; i++) {
+        signal[i] = 2.0 * ((signal[i] - min_val) / (float)(max_val - min_val)) - 1.0;
+    }
+}
+
+// Moving average function
+void movingAverageFilter(float* signal, size_t size, int window_size) {
+    float temp[size];
+    for (size_t i = 0; i < size; i++) {
+        temp[i] = signal[i];
+    }
+
+    for (size_t i = 0; i < size; i++) {
+        float sum = 0;
+        int count = 0;
+        for (int j = -window_size / 2; j <= window_size / 2; j++) {
+            if (i + j >= 0 && i + j < size) {
+                sum += temp[i + j];
+                count++;
+            }
+        }
+        signal[i] = sum / count;  // Average within the window
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+    delay(1000);
+
+    Serial.println("Processing Mock Signal...");
+
+    // Convert uint16_t array to float for processing
+    for (size_t i = 0; i < SIGNAL_SIZE; i++) {
+        processed_signal[i] = (float)mock_signal[i];
+    }
+
+    // Apply Low-Pass Filter (Butterworth approximation)
+    float alpha = 0.1;  // Adjust alpha for filtering strength
+    float prev_output = processed_signal[0];
+    for (size_t i = 1; i < SIGNAL_SIZE; i++) {
+        processed_signal[i] = lowPassFilter(processed_signal[i], prev_output, alpha);
+        prev_output = processed_signal[i];
+    }
+
+    // Normalize the signal
+    normalizeSignal(processed_signal, SIGNAL_SIZE);
+
+    // Apply Moving Average Filter
+    int window_size = 5;  // Window size for smoothing
+    movingAverageFilter(processed_signal, SIGNAL_SIZE, window_size);
+
+    Serial.println("Processed Signal:");
+    for (size_t i = 0; i < SIGNAL_SIZE; i++) {
+        Serial.println(processed_signal[i], 6);  // Print values with 6 decimal places
+    }
+}
+
+void loop() {
+    // Do nothing, as processing is done in setup()
+}
+
+
+

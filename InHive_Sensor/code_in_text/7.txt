@@ -1,0 +1,206 @@
+#include "mock_signal.h"
+#include <Arduino.h>
+#include <arduinoFFT.h>
+#include <vector>
+
+#define SIGNAL_SIZE 256  // Reduced from 1024 for faster processing
+#define SAMPLE_RATE 8000
+#define TARGET_FREQUENCY 400
+#define THRESHOLD_DB 10
+#define BUFFER_SIZE 32
+#define UPDATE_INTERVAL 100  // Update every 100ms
+
+// Simple circular buffer implementation
+template <typename T, size_t S>
+class SimpleBuffer {
+    T buffer[S];
+    size_t head = 0;
+    size_t count = 0;
+
+public:
+    void push(T value) {
+        buffer[head] = value;
+        head = (head + 1) % S;
+        if (count < S) count++;
+    }
+
+    T get(size_t index) const {
+        return buffer[(S + head - count + index) % S];
+    }
+
+    size_t size() const {
+        return count;
+    }
+
+    void clear() {
+        head = 0;
+        count = 0;
+    }
+};
+
+ArduinoFFT<float> FFT = ArduinoFFT<float>();
+SimpleBuffer<float, BUFFER_SIZE> signalBuffer;
+
+float* processed_signal;
+float* vReal;
+float* vImag;
+unsigned long lastUpdateTime = 0;
+
+// Optimized low-pass filter with pre-calculated coefficient
+const float alpha = 0.1f;
+const float oneMinusAlpha = 1.0f - alpha;
+
+float lowPassFilter(float input, float prev_output) {
+    return input * alpha + prev_output * oneMinusAlpha;
+}
+
+void normalizeSignal(float* signal, size_t size) {
+    float min_val = signal[0];
+    float max_val = signal[0];
+    float range;
+
+    // Single pass to find min/max
+    for (size_t i = 1; i < size; i++) {
+        min_val = min(min_val, signal[i]);
+        max_val = max(max_val, signal[i]);
+    }
+
+    range = max_val - min_val;
+    if (range == 0) return;  // Avoid division by zero
+
+    // Single pass normalization with pre-calculated scale
+    float scale = 2.0f / range;
+    for (size_t i = 0; i < size; i++) {
+        signal[i] = (signal[i] - min_val) * scale - 1.0f;
+    }
+}
+
+void movingAverageFilter(float* signal, size_t size, int window_size) {
+    static SimpleBuffer<float, 16> avgBuffer;
+    float sum = 0;
+
+    for (size_t i = 0; i < size; i++) {
+        avgBuffer.push(signal[i]);
+        sum = 0;
+        
+        for (size_t j = 0; j < avgBuffer.size(); j++) {
+            sum += avgBuffer.get(j);
+        }
+        
+        signal[i] = sum / avgBuffer.size();
+    }
+}
+
+// Anomaly statistics tracking
+struct AnomalyStats {
+    int anomalyCount = 0;
+    float avgFrequencyDeviation = 0;
+    float maxMagnitude = 0;
+    unsigned long lastAnomalyTime = 0;
+};
+
+AnomalyStats stats;
+
+void performFFT() {
+    static float prev_magnitude = 0;
+    
+    // Copy and prepare FFT data
+    for (size_t i = 0; i < SIGNAL_SIZE; i++) {
+        vReal[i] = processed_signal[i];
+        vImag[i] = 0;
+    }
+
+    FFT.windowing(vReal, SIGNAL_SIZE, FFT_WIN_TYP_HAMMING, FFT_FORWARD);
+    FFT.compute(vReal, vImag, SIGNAL_SIZE, FFT_FORWARD);
+    FFT.complexToMagnitude(vReal, vImag, SIGNAL_SIZE);
+
+    float maxMagnitude = 0;
+    float dominantFrequency = 0;
+
+    // Optimized peak detection
+    for (size_t i = 1; i < SIGNAL_SIZE / 2; i++) {
+        if (vReal[i] > maxMagnitude) {
+            maxMagnitude = vReal[i];
+            dominantFrequency = i * ((float)SAMPLE_RATE / SIGNAL_SIZE);
+        }
+    }
+
+    float magnitudeDB = 20 * log10(maxMagnitude);
+    float freqDeviation = abs(dominantFrequency - TARGET_FREQUENCY);
+
+    // Update statistics
+    stats.maxMagnitude = max(stats.maxMagnitude, magnitudeDB);
+    stats.avgFrequencyDeviation = (stats.avgFrequencyDeviation * stats.anomalyCount + freqDeviation) / (stats.anomalyCount + 1);
+
+    // Anomaly detection with hysteresis
+    bool isAnomaly = false;
+    if (freqDeviation > 50 || magnitudeDB > THRESHOLD_DB) {
+        if (millis() - stats.lastAnomalyTime > 1000) {  // Minimum 1 second between anomalies
+            isAnomaly = true;
+            stats.anomalyCount++;
+            stats.lastAnomalyTime = millis();
+        }
+    }
+
+    // Print results only if significant change or anomaly
+    if (abs(magnitudeDB - prev_magnitude) > 2 || isAnomaly) {
+        Serial.print("Freq: ");
+        Serial.print(dominantFrequency, 1);
+        Serial.print("Hz, Mag: ");
+        Serial.print(magnitudeDB, 1);
+        Serial.print("dB");
+        
+        if (isAnomaly) {
+            Serial.print(" ⚠️ ANOMALY #");
+            Serial.print(stats.anomalyCount);
+            Serial.print(" (Avg Dev: ");
+            Serial.print(stats.avgFrequencyDeviation, 1);
+            Serial.println("Hz)");
+        } else {
+            Serial.println();
+        }
+        
+        prev_magnitude = magnitudeDB;
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+    delay(1000);
+    
+    // Allocate memory
+    processed_signal = (float*)malloc(SIGNAL_SIZE * sizeof(float));
+    vReal = (float*)malloc(SIGNAL_SIZE * sizeof(float));
+    vImag = (float*)malloc(SIGNAL_SIZE * sizeof(float));
+    
+    if (!processed_signal || !vReal || !vImag) {
+        Serial.println("Memory allocation failed!");
+        return;
+    }
+
+    Serial.println("Real-time Signal Processing Started");
+}
+
+void loop() {
+    // Process signal in real-time
+    if (millis() - lastUpdateTime >= UPDATE_INTERVAL) {
+        // Sample new data (replace with actual ADC reading if needed)
+        for (size_t i = 0; i < SIGNAL_SIZE; i++) {
+            processed_signal[i] = (float)mock_signal[i % SIGNAL_SIZE];
+        }
+
+        static float prev_output = processed_signal[0];
+        
+        // Apply optimized filters
+        for (size_t i = 0; i < SIGNAL_SIZE; i++) {
+            processed_signal[i] = lowPassFilter(processed_signal[i], prev_output);
+            prev_output = processed_signal[i];
+        }
+
+        normalizeSignal(processed_signal, SIGNAL_SIZE);
+        movingAverageFilter(processed_signal, SIGNAL_SIZE, 5);
+        
+        performFFT();
+        lastUpdateTime = millis();
+    }
+}

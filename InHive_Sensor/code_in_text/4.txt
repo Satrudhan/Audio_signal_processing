@@ -1,0 +1,129 @@
+#include "mock_signal.h"
+#include <Arduino.h>
+#include <arduinoFFT.h>
+#include <vector>
+
+#define SIGNAL_SIZE (sizeof(mock_signal) / sizeof(mock_signal[0]))  // Get array size
+#define SAMPLE_RATE 8000  // Adjust based on actual sampling rate (Hz)
+#define TARGET_FREQUENCY 400  // Expected frequency
+#define THRESHOLD_DB 10  // dB threshold for anomaly detection
+
+ArduinoFFT<float> FFT = ArduinoFFT<float>();
+
+float* processed_signal;
+float* vReal;
+float* vImag;
+
+// Low-pass filter (Simple IIR implementation)
+float lowPassFilter(float input, float prev_output, float alpha) {
+    return alpha * input + (1 - alpha) * prev_output;
+}
+
+// Normalize function
+void normalizeSignal(float* signal, size_t size) {
+    uint16_t max_val = 65535;
+    uint16_t min_val = 0;
+    
+    for (size_t i = 0; i < size; i++) {
+        signal[i] = 2.0 * ((signal[i] - min_val) / (float)(max_val - min_val)) - 1.0;
+    }
+}
+
+// Moving average function
+void movingAverageFilter(float* signal, size_t size, int window_size) {
+    std::vector<float> temp(signal, signal + size);
+    for (size_t i = 0; i < size; i++) {
+        float sum = 0;
+        int count = 0;
+        for (int j = -window_size / 2; j <= window_size / 2; j++) {
+            if (i + j >= 0 && i + j < size) {
+                sum += temp[i + j];
+                count++;
+            }
+        }
+        signal[i] = sum / count;
+    }
+}
+
+// Perform FFT & Detect Anomalies
+void performFFT() {
+    // Copy processed signal to FFT input arrays
+    for (size_t i = 0; i < SIGNAL_SIZE; i++) {
+        vReal[i] = processed_signal[i];
+        vImag[i] = 0;
+    }
+
+    FFT.windowing(vReal, SIGNAL_SIZE, FFT_WIN_TYP_HAMMING, FFT_FORWARD);
+    FFT.compute(vReal, vImag, SIGNAL_SIZE, FFT_FORWARD);
+    FFT.complexToMagnitude(vReal, vImag, SIGNAL_SIZE);
+
+    float maxMagnitude = 0;
+    float dominantFrequency = 0;
+
+    // Find peak frequency
+    for (size_t i = 1; i < SIGNAL_SIZE / 2; i++) {
+        float magnitude = vReal[i];
+        float frequency = i * ((float)SAMPLE_RATE / SIGNAL_SIZE);
+
+        if (magnitude > maxMagnitude) {
+            maxMagnitude = magnitude;
+            dominantFrequency = frequency;
+        }
+    }
+
+    float magnitudeDB = 20 * log10(maxMagnitude);
+
+    Serial.print("Dominant Frequency: ");
+    Serial.print(dominantFrequency, 2);
+    Serial.print(" Hz, Magnitude: ");
+    Serial.print(magnitudeDB, 2);
+    Serial.println(" dB");
+
+    // Anomaly detection
+    if (abs(dominantFrequency - TARGET_FREQUENCY) > 50 || magnitudeDB > THRESHOLD_DB) {
+        Serial.println("⚠️ Anomaly Detected!");
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+    delay(1000);
+    Serial.println("Processing Mock Signal...");
+
+    // Allocate memory dynamically
+    processed_signal = (float*) malloc(SIGNAL_SIZE * sizeof(float));
+    vReal = (float*) malloc(SIGNAL_SIZE * sizeof(float));
+    vImag = (float*) malloc(SIGNAL_SIZE * sizeof(float));
+    
+    if (!processed_signal || !vReal || !vImag) {
+        Serial.println("Memory allocation failed!");
+        while(1);
+    }
+
+    // Convert uint16_t array to float for processing
+    for (size_t i = 0; i < SIGNAL_SIZE; i++) {
+        processed_signal[i] = (float)mock_signal[i];
+    }
+
+    // Apply Low-Pass Filter
+    float alpha = 0.1;
+    float prev_output = processed_signal[0];
+    for (size_t i = 1; i < SIGNAL_SIZE; i++) {
+        processed_signal[i] = lowPassFilter(processed_signal[i], prev_output, alpha);
+        prev_output = processed_signal[i];
+    }
+
+    // Normalize the signal
+    normalizeSignal(processed_signal, SIGNAL_SIZE);
+
+    // Apply Moving Average Filter
+    int window_size = 5;
+    movingAverageFilter(processed_signal, SIGNAL_SIZE, window_size);
+
+    Serial.println("Running FFT...");
+    performFFT();
+}
+
+void loop() {
+    delay(5000);
+}
