@@ -8,7 +8,6 @@
 ### Part 1: Sensor Data Acquisition & Preprocessing
 1. **Set up a microphone sensor** (Electret or MEMS) with the **ADC2** pin of an ESP32.
 2. Sample the audio signal at **8 kHz or higher**. - Use the below mocked signal[0] or you can generate as well.
-3. Mock Signal File: [0] Link
 4. Mock Signal File: [0] [Link](https://github.com/Satrudhan/Audio_signal_processing/blob/main/InHive_Sensor/scripts/mock_signal.npy)
 5. Implement **preprocessing techniques**:
    - Apply a **low-pass filter** (e.g., Butterworth) to remove high-frequency noise.
@@ -24,18 +23,16 @@
 
 ### Part 3: Wireless Data Transmission via Bluetooth & Wi-Fi
 1. **InHive Sensor Firmware**:
-   - Transmit **processed sound features** (not raw audio) over Bluetooth to the gateway.
+   - Transmit **processed sound features using ESP WROOM 32** (not raw audio) over Bluetooth to the gateway.
    - Implement **data compression** for efficient transmission.
 2. **Gateway Firmware**:
-   - Receives data over BLE from InHive Sensor.
+   - Receives data over BLE using ESP WROOM 32 from InHive Sensor.
    - Sends data to an **HTTP API endpoint**.
    - Implement **error handling** (e.g., retry failed transmissions).
 
-## Deliverables
-- **Firmware Code** (ESP32, C/C++ with Arduino or ESP-IDF).
-- **Python/Matlab scripts** for signal processing tests (if applicable).
-- **Report (one pager)** explaining:
-  - Your approach
-  - Challenges faced
-  - Optimization techniques
-  - Sample processed data & graphs
+## Implemented Parts
+- **Firmware Code** (ESP32, C/C++ with Platform IO or ESP-IDF).
+- **Python/Matlab scripts** for signal processing tests and analysis.
+
+## Hardware Demo
+[Hardware Demo Video](https://drive.google.com/file/d/1WkpvI5xJFhGXISHnsoeXTCJkSDkqH9Lf/view?usp=sharing)
